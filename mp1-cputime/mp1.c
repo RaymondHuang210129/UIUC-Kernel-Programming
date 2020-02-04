@@ -76,3 +76,8 @@ void __exit mp1_exit(void)
 // Register init and exit funtions
 module_init(mp1_init);
 module_exit(mp1_exit);
+
+/*
+step 1 completed.
+step 2 completed.
+*/
