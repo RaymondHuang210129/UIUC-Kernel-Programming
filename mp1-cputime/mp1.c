@@ -17,6 +17,7 @@ int __init mp1_init(void)
    printk(KERN_ALERT "MP1 MODULE LOADING\n");
    #endif
    // Insert your code here ...
+   printk(KERN_ALERT "hello world\n");
    
    
    
@@ -32,7 +33,7 @@ void __exit mp1_exit(void)
    #endif
    // Insert your code here ...
    
-   
+   printk(KERN_ALERT "bye world.\n");
 
    printk(KERN_ALERT "MP1 MODULE UNLOADED\n");
 }
