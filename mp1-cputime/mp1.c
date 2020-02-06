@@ -178,4 +178,6 @@ module_exit(mp1_exit);
 step 1 completed.
 step 2 completed.
 step 3 completed.
+step 4 partially completed. copy_to_user is not used.
+step 5 completed.
 */
