@@ -9,6 +9,9 @@
 #include <linux/seq_file.h>
 #include <linux/uaccess.h>
 #include <linux/slab.h>
+#include <linux/timer.h>
+#include <linux/workqueue.h>
+#include <linux/mutex.h>
 
 #include "mp1_given.h"
 
@@ -24,14 +27,29 @@ static char * input_str;
 
 struct pid_entry {
    long pid;
+   unsigned long cpu_use;
    struct list_head ptrs;
 };
 
 static struct list_head mp1_entries;
+static struct timer_list mp1_timer;
+static struct workqueue_struct * mp1_workqueue;
+
+DEFINE_MUTEX(linked_list_mutex);
 
 static int mp1_show(struct seq_file * m, void * v)
 {
-   seq_printf(m, "mp1_show printing.\n");
+   struct list_head *pos, *q;
+   struct pid_entry *tmp;
+
+   printk(KERN_ALERT "mp1_show printing.\n");
+   mutex_lock(&linked_list_mutex);
+   list_for_each_safe(pos, q, &mp1_entries)
+   {
+      tmp = list_entry(pos, struct pid_entry, ptrs);
+      seq_printf(m, "%ld: %lu\n", tmp->pid, tmp->cpu_use);
+   }
+   mutex_unlock(&linked_list_mutex);
    return 0;
 }
 
@@ -84,9 +102,13 @@ ssize_t mp1_write(struct file * file, const char __user * ubuf, size_t size, lof
       return (ssize_t)size;
    }
    new_entry->pid = pid;
+   new_entry->cpu_use = 0;
    INIT_LIST_HEAD(&(new_entry->ptrs));
+
    printk(KERN_ALERT "add new entry to list.\n");
+   mutex_lock(&linked_list_mutex);
    list_add(&(new_entry->ptrs), &mp1_entries);
+   mutex_unlock(&linked_list_mutex);
 
    return (ssize_t)size;
 }
@@ -100,14 +122,50 @@ static const struct file_operations mp1_fops = {
    .write = mp1_write
 };
 
+void mp1_work_function(struct work_struct * work) {
+   struct list_head *pos, *q;
+   struct pid_entry *tmp;
+   unsigned long cpu_use;
+   printk(KERN_ALERT "work function activated.\n");
+   mutex_lock(&linked_list_mutex);
+   list_for_each_safe(pos, q, &mp1_entries)
+   {
+      tmp = list_entry(pos, struct pid_entry, ptrs);
+      if(get_cpu_use(tmp->pid, &cpu_use))
+      {
+         printk(KERN_ALERT "pid not exist: %ld.\n", tmp->pid);
+         list_del(pos);
+         kfree(tmp);
+      }
+      else 
+      {
+         tmp->cpu_use = cpu_use;
+         printk(KERN_ALERT "update process id %ld's CPU usage: %lu", tmp->pid, tmp->cpu_use);
+      }
+   }
+   mutex_unlock(&linked_list_mutex);
+   kfree((void *)work);
+}
+
+void timer_callback(unsigned long data) {
+   struct work_struct * new_work;
+   new_work = kzalloc(sizeof(struct work_struct), GFP_KERNEL);
+   mod_timer(&mp1_timer, jiffies + msecs_to_jiffies(5000));
+   printk(KERN_ALERT "callback every 5 seconds.\n");
+   INIT_WORK(new_work, mp1_work_function);
+   queue_work(mp1_workqueue, new_work);
+   if(in_interrupt()) {
+      printk(KERN_ALERT "context: interrupt\n");
+   }
+
+}
+
 // mp1_init - Called when module is loaded
 int __init mp1_init(void)
 {
    #ifdef DEBUG
    printk(KERN_ALERT "MP1 MODULE LOADING\n");
    #endif
-
-   // Insert your code here ...
 
    // section: initialization
    printk(KERN_ALERT "input_str set to NULL.\n");
@@ -123,8 +181,13 @@ int __init mp1_init(void)
    mp1_entries.next = &mp1_entries;
    mp1_entries.prev = &mp1_entries;
 
+   printk(KERN_ALERT "setup timer.\n");
+   setup_timer(&mp1_timer, timer_callback, 0);
+   mod_timer(&mp1_timer, jiffies + msecs_to_jiffies(5000));
 
-   
+   printk(KERN_ALERT "setup workqueue.\n");
+   mp1_workqueue = create_workqueue("mp1_workqueue");
+
    printk(KERN_ALERT "MP1 MODULE LOADED\n");
    return 0;   
 }
@@ -139,9 +202,15 @@ void __exit mp1_exit(void)
    printk(KERN_ALERT "MP1 MODULE UNLOADING\n");
    #endif
 
-   // Insert your code here ...
+   printk(KERN_ALERT "delete workqueue.\n");
+   flush_workqueue(mp1_workqueue);
+   destroy_workqueue(mp1_workqueue);
+
+   printk(KERN_ALERT "delete working timer.\n");
+   del_timer_sync(&mp1_timer);
 
    printk(KERN_ALERT "freeing the whole linked list.\n");
+   mutex_lock(&linked_list_mutex);
    list_for_each_safe(pos, q, &mp1_entries)
    {
       tmp = list_entry(pos, struct pid_entry, ptrs);
@@ -149,7 +218,7 @@ void __exit mp1_exit(void)
       list_del(pos);
       kfree(tmp);
    }
-
+   mutex_unlock(&linked_list_mutex);
 
    if (input_str != NULL)
    {
@@ -164,9 +233,6 @@ void __exit mp1_exit(void)
    printk(KERN_ALERT "remove proc directory \"mp1\".\n");
    remove_proc_entry("mp1", NULL);
 
-
-
-
    printk(KERN_ALERT "MP1 MODULE UNLOADED\n");
 }
 
@@ -180,4 +246,5 @@ step 2 completed.
 step 3 completed.
 step 4 partially completed. copy_to_user is not used.
 step 5 completed.
+step 6 ~ 8 completed.
 */
