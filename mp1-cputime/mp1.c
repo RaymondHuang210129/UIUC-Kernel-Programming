@@ -21,9 +21,7 @@ MODULE_DESCRIPTION("CS-423 MP1");
 
 #define DEBUG 1
 
-static struct proc_dir_entry* mp1_proc;
-static struct proc_dir_entry* mp1_dir;
-static char * input_str;
+/* section: type definition */
 
 struct pid_entry {
    long pid;
@@ -31,11 +29,36 @@ struct pid_entry {
    struct list_head ptrs;
 };
 
+/* section: function declaration */
+
+static int mp1_show(struct seq_file * m, void * v);
+static int mp1_open(struct inode *inode, struct file *file);
+ssize_t mp1_write(struct file * file, const char __user * ubuf, size_t size, loff_t * pos);
+void mp1_work_function(struct work_struct * work);
+void timer_callback(unsigned long data);
+
+/* section: variable initialization */
+
+static struct proc_dir_entry* mp1_proc;
+static struct proc_dir_entry* mp1_dir;
+static char * input_str;
+
 static struct list_head mp1_entries;
 static struct timer_list mp1_timer;
 static struct workqueue_struct * mp1_workqueue;
 
 DEFINE_MUTEX(linked_list_mutex);
+
+static const struct file_operations mp1_fops = {
+   .owner = THIS_MODULE,
+   .open = mp1_open,
+   .read = seq_read,
+   .llseek = seq_lseek,
+   .release = single_release,
+   .write = mp1_write
+};
+
+/* section: function definition */
 
 static int mp1_show(struct seq_file * m, void * v)
 {
@@ -50,6 +73,7 @@ static int mp1_show(struct seq_file * m, void * v)
       seq_printf(m, "%ld: %lu\n", tmp->pid, tmp->cpu_use);
    }
    mutex_unlock(&linked_list_mutex);
+
    return 0;
 }
 
@@ -113,16 +137,8 @@ ssize_t mp1_write(struct file * file, const char __user * ubuf, size_t size, lof
    return (ssize_t)size;
 }
 
-static const struct file_operations mp1_fops = {
-   .owner = THIS_MODULE,
-   .open = mp1_open,
-   .read = seq_read,
-   .llseek = seq_lseek,
-   .release = single_release,
-   .write = mp1_write
-};
-
-void mp1_work_function(struct work_struct * work) {
+void mp1_work_function(struct work_struct * work) 
+{
    struct list_head *pos, *q;
    struct pid_entry *tmp;
    unsigned long cpu_use;
@@ -151,13 +167,8 @@ void timer_callback(unsigned long data) {
    struct work_struct * new_work;
    new_work = kzalloc(sizeof(struct work_struct), GFP_KERNEL);
    mod_timer(&mp1_timer, jiffies + msecs_to_jiffies(5000));
-   printk(KERN_ALERT "callback every 5 seconds.\n");
    INIT_WORK(new_work, mp1_work_function);
    queue_work(mp1_workqueue, new_work);
-   if(in_interrupt()) {
-      printk(KERN_ALERT "context: interrupt\n");
-   }
-
 }
 
 // mp1_init - Called when module is loaded
@@ -167,25 +178,22 @@ int __init mp1_init(void)
    printk(KERN_ALERT "MP1 MODULE LOADING\n");
    #endif
 
-   // section: initialization
-   printk(KERN_ALERT "input_str set to NULL.\n");
+   /* section: initialization */
    input_str = NULL;
 
-   printk(KERN_ALERT "adding proc directory \"mp1\"\n");
+   /* section: create target proc file */
    mp1_dir = proc_mkdir("mp1", NULL);
-   
-   printk(KERN_ALERT "adding proc file \"status\"\n");
    mp1_proc = proc_create("status", 0777, mp1_dir, &mp1_fops);
 
-   printk(KERN_ALERT "creating empty linked list.\n");
+   /* section: create empty linked list */
    mp1_entries.next = &mp1_entries;
    mp1_entries.prev = &mp1_entries;
 
-   printk(KERN_ALERT "setup timer.\n");
+   /* section: setup timer */
    setup_timer(&mp1_timer, timer_callback, 0);
    mod_timer(&mp1_timer, jiffies + msecs_to_jiffies(5000));
 
-   printk(KERN_ALERT "setup workqueue.\n");
+   /* section: create workqueue */
    mp1_workqueue = create_workqueue("mp1_workqueue");
 
    printk(KERN_ALERT "MP1 MODULE LOADED\n");
@@ -202,14 +210,14 @@ void __exit mp1_exit(void)
    printk(KERN_ALERT "MP1 MODULE UNLOADING\n");
    #endif
 
-   printk(KERN_ALERT "delete workqueue.\n");
+   /* section: delete workqueue */
    flush_workqueue(mp1_workqueue);
    destroy_workqueue(mp1_workqueue);
 
-   printk(KERN_ALERT "delete working timer.\n");
+   /* section: delete timer */
    del_timer_sync(&mp1_timer);
 
-   printk(KERN_ALERT "freeing the whole linked list.\n");
+   /* section: delete linked list */
    mutex_lock(&linked_list_mutex);
    list_for_each_safe(pos, q, &mp1_entries)
    {
@@ -220,6 +228,7 @@ void __exit mp1_exit(void)
    }
    mutex_unlock(&linked_list_mutex);
 
+   /* section: free global pointers */
    if (input_str != NULL)
    {
       printk(KERN_ALERT "input_str is not null, free it.\n");
@@ -227,10 +236,8 @@ void __exit mp1_exit(void)
       input_str = NULL;
    }
 
-   printk(KERN_ALERT "remove proc file \"status\".\n");
+   /* section: remove target proc file */
    remove_proc_entry("status", mp1_dir);
-
-   printk(KERN_ALERT "remove proc directory \"mp1\".\n");
    remove_proc_entry("mp1", NULL);
 
    printk(KERN_ALERT "MP1 MODULE UNLOADED\n");
