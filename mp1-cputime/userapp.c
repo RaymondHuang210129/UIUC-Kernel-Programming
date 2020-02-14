@@ -19,7 +19,7 @@ int main(int argc, char* argv[])
 	fp = fopen("/proc/mp1/status", "r");
 	while(getline(&line_buf, &line_buf_size, fp) != EOF)
 	{
-		printf("%s\n", line_buf);
+		printf("%s", line_buf);
 	}
 
 

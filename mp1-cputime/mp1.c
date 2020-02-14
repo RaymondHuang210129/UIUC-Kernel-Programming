@@ -16,7 +16,7 @@
 #include "mp1_given.h"
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Group_ID");
+MODULE_AUTHOR("Tse-Jui Huang");
 MODULE_DESCRIPTION("CS-423 MP1");
 
 #define DEBUG 1
@@ -46,6 +46,7 @@ static char * input_str;
 static struct list_head mp1_entries;
 static struct timer_list mp1_timer;
 static struct workqueue_struct * mp1_workqueue;
+struct work_struct * deferred_work;
 
 DEFINE_MUTEX(linked_list_mutex);
 
@@ -65,7 +66,7 @@ static int mp1_show(struct seq_file * m, void * v)
    struct list_head *pos, *q;
    struct pid_entry *tmp;
 
-   printk(KERN_ALERT "mp1_show printing.\n");
+   /* section: iterate each linked list and print out cpu_use */
    mutex_lock(&linked_list_mutex);
    list_for_each_safe(pos, q, &mp1_entries)
    {
@@ -110,6 +111,7 @@ ssize_t mp1_write(struct file * file, const char __user * ubuf, size_t size, lof
       return EFAULT;
    }
 
+   /* transform string into integer */
    if (kstrtol(input_str, 0, &pid))
    {
       printk(KERN_ALERT "get invalid PID.\n");
@@ -150,6 +152,7 @@ void mp1_work_function(struct work_struct * work)
       if(get_cpu_use(tmp->pid, &cpu_use))
       {
          printk(KERN_ALERT "pid not exist: %ld.\n", tmp->pid);
+         /* note: delete instance if the process no longer exists */
          list_del(pos);
          kfree(tmp);
       }
@@ -160,15 +163,13 @@ void mp1_work_function(struct work_struct * work)
       }
    }
    mutex_unlock(&linked_list_mutex);
-   kfree((void *)work);
 }
 
 void timer_callback(unsigned long data) {
-   struct work_struct * new_work;
-   new_work = kzalloc(sizeof(struct work_struct), GFP_KERNEL);
+   /* section: generate new work */
+   /* this function is processed in interrupt context */
    mod_timer(&mp1_timer, jiffies + msecs_to_jiffies(5000));
-   INIT_WORK(new_work, mp1_work_function);
-   queue_work(mp1_workqueue, new_work);
+   queue_work(mp1_workqueue, deferred_work);
 }
 
 // mp1_init - Called when module is loaded
@@ -192,6 +193,9 @@ int __init mp1_init(void)
    /* section: setup timer */
    setup_timer(&mp1_timer, timer_callback, 0);
    mod_timer(&mp1_timer, jiffies + msecs_to_jiffies(5000));
+      /* note: generate new work */
+   deferred_work = kzalloc(sizeof(struct work_struct), GFP_KERNEL);
+   INIT_WORK(deferred_work, mp1_work_function);
 
    /* section: create workqueue */
    mp1_workqueue = create_workqueue("mp1_workqueue");
@@ -213,6 +217,7 @@ void __exit mp1_exit(void)
    /* section: delete workqueue */
    flush_workqueue(mp1_workqueue);
    destroy_workqueue(mp1_workqueue);
+   kfree(deferred_work);
 
    /* section: delete timer */
    del_timer_sync(&mp1_timer);
