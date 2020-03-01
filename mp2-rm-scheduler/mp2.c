@@ -40,6 +40,12 @@ static int mp2_open(struct inode *inode, struct file *file)
 
 ssize_t mp2_write(struct file * file, const char __user * ubuf, size_t size, loff_t * pos)
 {
+    char * buffer;
+    char * str_ptr;
+    long pid = 0;
+    long period = 0;
+    long computation_time;
+    
     if (input_str != NULL) {
 		printk(KERN_ALERT "input_str is not null.\n");
 		kfree(input_str);
@@ -64,13 +70,67 @@ ssize_t mp2_write(struct file * file, const char __user * ubuf, size_t size, lof
 	}
 
     /* section: identify command */
-    if (strlen(input_str) >= 13 && strncmp(input_str, "Registration", 12) == 0) {
-        printk(KERN_ALERT "app registration\n");
-    } else if (strlen(input_str) >= 6 && strncmp(input_str, "Yield", 5) == 0) {
-        printk(KERN_ALERT "app yield\n");
-    } else if (strlen(input_str) >= 15 && strncmp(input_str, "Deregistration", 14) == 0) {
-        printk(KERN_ALERT "app deregistration\n");
-    } else {
+    str_ptr = input_str;
+    buffer = strsep(&str_ptr, ",");
+    if (strlen(buffer) == 1 && strncmp(buffer, "R", 1) == 0) 
+    {
+        printk(KERN_ALERT "get R\n");
+
+        /* note: get PID */
+        buffer = strsep(&str_ptr, ",");
+        if (kstrtol(buffer, 0, &pid))
+        {
+		    printk(KERN_ALERT "get invalid PID.\n");
+		    return (ssize_t)size;
+	    }
+        printk(KERN_ALERT "PID: %ld\n", pid);
+
+        /* note: get period */
+        buffer = strsep(&str_ptr, ",");
+        if (kstrtol(buffer, 0, &period))
+        {
+		    printk(KERN_ALERT "get invalid period.\n");
+		    return (ssize_t)size;
+	    }
+        printk(KERN_ALERT "period: %ld\n", period);
+
+        /* note: get computation time */
+        if (kstrtol(str_ptr, 0, &computation_time))
+        {
+		    printk(KERN_ALERT "get invalid comp time.\n");
+		    return (ssize_t)size;
+	    }
+        printk(KERN_ALERT "computation time: %ld\n", computation_time);
+        str_ptr = NULL;
+    } 
+    else if (strlen(buffer) >= 1 && strncmp(buffer, "Y", 1) == 0) 
+    {
+        printk(KERN_ALERT "get Y\n");
+
+        /* note: get PID */
+        if (kstrtol(str_ptr, 0, &pid))
+        {
+		    printk(KERN_ALERT "get invalid pid.\n");
+		    return (ssize_t)size;
+	    }
+        printk(KERN_ALERT "PID: %ld\n", pid);
+        str_ptr = NULL;
+    } 
+    else if (strlen(buffer) >= 1 && strncmp(buffer, "D", 1) == 0) 
+    {
+        printk(KERN_ALERT "get D\n");
+
+        /* note: get PID */
+        if (kstrtol(str_ptr, 0, &pid))
+        {
+		    printk(KERN_ALERT "get invalid pid.\n");
+		    return (ssize_t)size;
+	    }
+        printk(KERN_ALERT "PID: %ld\n", pid);
+        str_ptr = NULL;
+    } 
+    else 
+    {
         printk(KERN_ALERT "input unknown command\n");
     }
 
