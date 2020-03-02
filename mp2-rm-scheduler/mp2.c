@@ -69,13 +69,12 @@ static int mp2_open(struct inode *inode, struct file *file)
 static void timer_callback(unsigned long data)
 {
     /* warning: in interrupt context */
-    printk(KERN_ALERT "callback\n");
     struct mp2_process_entry * process = (struct mp2_process_entry *)data;
     printk(KERN_ALERT "process %ld timer callback\n", process->pid);
     mod_timer(&process->wakeup_timer, jiffies + msecs_to_jiffies(process->period));
 }
 
-static int registration(long pid, long period, long comp_time)
+static int registration(unsigned long pid, unsigned long period, unsigned long comp_time)
 {
     /* section: create new process node */
     struct mp2_process_entry * new_process = kmem_cache_alloc(mp2_process_entries_slab, GFP_KERNEL);
@@ -102,6 +101,32 @@ static int registration(long pid, long period, long comp_time)
     list_add(&new_process->ptrs, &mp2_process_entries);
     mutex_unlock(&process_list_mutex);
     return 0;
+}
+
+static int deregistration(unsigned long pid)
+{
+    struct list_head *pos, *q;
+    struct mp2_process_entry *tmp;
+
+    /* section: delete the node belongs to pid */
+    mutex_lock(&process_list_mutex);
+    list_for_each_safe(pos, q, &mp2_process_entries)
+    {
+        tmp = list_entry(pos, struct mp2_process_entry, ptrs);
+        if (tmp->pid == pid)
+        {
+            /* section: delete timer, delete node, and break */
+            printk(KERN_ALERT "delete timer of PID %ld", tmp->pid);
+            del_timer_sync(&tmp->wakeup_timer);
+            printk(KERN_ALERT "delete entry PID %ld", tmp->pid);
+            list_del(pos);
+            kmem_cache_free(mp2_process_entries_slab, tmp);
+            mutex_unlock(&process_list_mutex);
+            return 0;
+        }
+    }  
+    mutex_unlock(&process_list_mutex);
+    return 1;
 }
 
 static ssize_t mp2_write(struct file * file, const char __user * ubuf, size_t size, loff_t * pos)
@@ -142,7 +167,7 @@ static ssize_t mp2_write(struct file * file, const char __user * ubuf, size_t si
     {
         printk(KERN_ALERT "get R\n");
 
-        /* note: get PID */
+        /* section: get PID */
         buffer = strsep(&str_ptr, ",");
         if (kstrtol(buffer, 0, &pid))
         {
@@ -151,7 +176,7 @@ static ssize_t mp2_write(struct file * file, const char __user * ubuf, size_t si
 	    }
         printk(KERN_ALERT "PID: %ld\n", pid);
 
-        /* note: get period */
+        /* section: get period */
         buffer = strsep(&str_ptr, ",");
         if (kstrtol(buffer, 0, &period))
         {
@@ -160,7 +185,7 @@ static ssize_t mp2_write(struct file * file, const char __user * ubuf, size_t si
 	    }
         printk(KERN_ALERT "period: %ld\n", period);
 
-        /* note: get computation time */
+        /* section: get computation time */
         if (kstrtol(str_ptr, 0, &computation_time))
         {
 		    printk(KERN_ALERT "get invalid comp time.\n");
@@ -169,7 +194,7 @@ static ssize_t mp2_write(struct file * file, const char __user * ubuf, size_t si
         printk(KERN_ALERT "computation time: %ld\n", computation_time);
         str_ptr = NULL;
 
-        /* note: registration */
+        /* section: registration */
         if(registration(pid, period, computation_time))
         {
             printk(KERN_ALERT "registration failed\n");
@@ -179,7 +204,7 @@ static ssize_t mp2_write(struct file * file, const char __user * ubuf, size_t si
     {
         printk(KERN_ALERT "get Y\n");
 
-        /* note: get PID */
+        /* section: get PID */
         if (kstrtol(str_ptr, 0, &pid))
         {
 		    printk(KERN_ALERT "get invalid pid.\n");
@@ -192,7 +217,7 @@ static ssize_t mp2_write(struct file * file, const char __user * ubuf, size_t si
     {
         printk(KERN_ALERT "get D\n");
 
-        /* note: get PID */
+        /* section: get PID */
         if (kstrtol(str_ptr, 0, &pid))
         {
 		    printk(KERN_ALERT "get invalid pid.\n");
@@ -200,6 +225,12 @@ static ssize_t mp2_write(struct file * file, const char __user * ubuf, size_t si
 	    }
         printk(KERN_ALERT "PID: %ld\n", pid);
         str_ptr = NULL;
+
+        /* section: deregistration */
+        if(deregistration(pid))
+        {
+            printk(KERN_ALERT "deregistration failed\n");
+        }
     } 
     else 
     {
