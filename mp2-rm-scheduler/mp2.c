@@ -103,6 +103,11 @@ static int registration(unsigned long pid, unsigned long period, unsigned long c
     return 0;
 }
 
+static int yield(unsigned long pid)
+{
+    return 0;
+}
+
 static int deregistration(unsigned long pid)
 {
     struct list_head *pos, *q;
@@ -195,7 +200,7 @@ static ssize_t mp2_write(struct file * file, const char __user * ubuf, size_t si
         str_ptr = NULL;
 
         /* section: registration */
-        if(registration(pid, period, computation_time))
+        if (registration(pid, period, computation_time))
         {
             printk(KERN_ALERT "registration failed\n");
         }
@@ -212,6 +217,10 @@ static ssize_t mp2_write(struct file * file, const char __user * ubuf, size_t si
 	    }
         printk(KERN_ALERT "PID: %ld\n", pid);
         str_ptr = NULL;
+        if (yield(pid))
+        {
+            printk(KERN_ALERT "yield failed\n");
+        }
     } 
     else if (strlen(buffer) >= 1 && strncmp(buffer, "D", 1) == 0) 
     {
