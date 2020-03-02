@@ -14,6 +14,8 @@
 #include <linux/mutex.h>
 #include <linux/string.h>
 
+#include <linux/kthread.h>
+
 #include "mp2_given.h"
 
 MODULE_LICENSE("GPL");
@@ -33,7 +35,18 @@ struct mp2_process_entry {
     unsigned long comp_time;
 };
 
-/* section: variable initialization */
+/* section: function delcaration */
+
+static int mp2_show(struct seq_file * m, void * v);
+static int mp2_open(struct inode *inode, struct file *file);
+static void timer_callback(unsigned long data);
+static int registration(unsigned long pid, unsigned long period, unsigned long comp_time);
+static int yield_cpu(unsigned long pid);
+static int deregistration(unsigned long pid);
+static ssize_t mp2_write(struct file * file, const char __user * ubuf, size_t size, loff_t * pos);
+static int dispatching_func(void * data);
+
+/* section: variable declaration & initialization */
 
 static struct proc_dir_entry * mp2_proc;
 static struct proc_dir_entry * mp2_dir;
@@ -43,6 +56,18 @@ static struct kmem_cache * mp2_process_entries_slab = NULL;
 static struct list_head mp2_process_entries;
 
 DEFINE_MUTEX(process_list_mutex);
+
+static const struct file_operations mp2_fops = {
+    .owner = THIS_MODULE,
+    .open = mp2_open,
+    .read = seq_read,
+    .llseek = seq_lseek,
+    .release = single_release,
+    .write = mp2_write
+};
+
+static struct task_struct * dispatching_thread;
+static struct task_struct * running_process = NULL;
 
 /* section: function definition */
 
@@ -103,8 +128,18 @@ static int registration(unsigned long pid, unsigned long period, unsigned long c
     return 0;
 }
 
-static int yield(unsigned long pid)
+static int yield_cpu(unsigned long pid)
 {
+    struct task_struct * yield_process = find_task_by_pid((unsigned int) pid);
+    struct sched_param sparam;
+
+    /* section: put the process into sleep and wake up dispatching thread */
+    if (yield_process)
+    {
+        sparam.sched_priority = 0;
+        sched_setscheduler(yield_process, SCHED_NORMAL, &sparam);
+        wake_up_process(dispatching_thread);
+    }
     return 0;
 }
 
@@ -217,7 +252,7 @@ static ssize_t mp2_write(struct file * file, const char __user * ubuf, size_t si
 	    }
         printk(KERN_ALERT "PID: %ld\n", pid);
         str_ptr = NULL;
-        if (yield(pid))
+        if (yield_cpu(pid))
         {
             printk(KERN_ALERT "yield failed\n");
         }
@@ -249,14 +284,58 @@ static ssize_t mp2_write(struct file * file, const char __user * ubuf, size_t si
     return (ssize_t)size;
 }
 
-static const struct file_operations mp2_fops = {
-    .owner = THIS_MODULE,
-    .open = mp2_open,
-    .read = seq_read,
-    .llseek = seq_lseek,
-    .release = single_release,
-    .write = mp2_write
-};
+static int dispatching_func(void * data)
+{
+    struct list_head *pos, *q;
+    struct mp2_process_entry *tmp;
+    long shortest_period;
+    struct task_struct * highest_task;
+    struct sched_param sparam;
+    
+    set_current_state(TASK_INTERRUPTIBLE);
+    schedule();
+    while(!kthread_should_stop())
+    {
+        /* note: thread is awaked */
+
+        /* section: find the process which has largest priority */
+        shortest_period = ULONG_MAX;
+        highest_task = NULL;
+        mutex_lock(&process_list_mutex);
+        list_for_each_safe(pos, q, &mp2_process_entries)
+        {
+            tmp = list_entry(pos, struct mp2_process_entry, ptrs);
+            if (tmp->linux_task->state == TASK_RUNNING)
+            {
+                if (tmp->period < shortest_period)
+                {
+                    shortest_period = tmp->period;
+                    highest_task = tmp->linux_task;
+                }
+            }
+        }
+        mutex_unlock(&process_list_mutex);
+
+        /* section: sleep the running process (if any) */
+        if (running_process != NULL)
+        {
+            sparam.sched_priority = 0;
+            sched_setscheduler(running_process, SCHED_NORMAL, &sparam);
+        }
+
+        /* section: wake up the ready process (if any) */
+        if (highest_task != NULL)
+        {
+            wake_up_process(highest_task);
+            sparam.sched_priority = 99;
+            sched_setscheduler(highest_task, SCHED_FIFO, &sparam);
+        }
+
+        set_current_state(TASK_INTERRUPTIBLE);
+        schedule();        
+    }
+    return 0;
+}
 
 int __init mp2_init(void)
 {
@@ -280,7 +359,8 @@ int __init mp2_init(void)
     mp2_process_entries.next = &mp2_process_entries;
     mp2_process_entries.prev = &mp2_process_entries;
 
-
+    /* section: create kernel thread to conduct context switch */
+    dispatching_thread = kthread_run(dispatching_func, NULL, "context switch thread");
 
     printk(KERN_ALERT "MP1 MODULE LOADED\n");
     return 0;
@@ -312,6 +392,8 @@ void __exit mp2_exit(void)
     }
     mutex_unlock(&process_list_mutex);
 
+    /* section: delete context switch thread */
+    kthread_stop(dispatching_thread);
 
     /* section: destroy slab */
     printk(KERN_ALERT "destroy slab\n");
