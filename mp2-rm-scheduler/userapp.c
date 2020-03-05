@@ -19,7 +19,8 @@ int main(int argc, char* argv[])
 	
     /* section: register the process */
     fp = fopen("/proc/mp2/status", "w");
-	fprintf(fp, "R,%d,%d,%d", pid, period, comp_time);
+	fprintf(fp, "R, %d, %d, %d", pid, period, comp_time);
+    printf("R, %d, %d, %d", pid, period, comp_time);
 	fclose(fp);
 
     /* section: check whether is success or not */
@@ -45,20 +46,22 @@ int main(int argc, char* argv[])
         return 0;
     }
 
+    /* section: yield */
+    printf("go to sleep\n");
+
+    fp = fopen("/proc/mp2/status", "w");
+	fprintf(fp, "Y, %d", pid);
+    fclose(fp);
+
+    printf("wake up\n");
+
+    /* section: job */
     for (round = 0; round < 5; round++) 
     {
-        /* section: yield */
-        fp = fopen("/proc/mp2/status", "w");
-	    fprintf(fp, "Y,%d", pid);
-
-        /* note: sleeping... */
-        /* note: wake up !!! */
-
-        fclose(fp);
-
         /* section: start factorial computation */
         gettimeofday(&start_time, NULL);
         factorial = 1;
+        
         for (i = 1;; i++) 
         {
             factorial *= i;
@@ -69,10 +72,19 @@ int main(int argc, char* argv[])
                 break;
             }
         }
+
+        /* section: yield */
+        printf("go to sleep\n");
+
+        fp = fopen("/proc/mp2/status", "w");
+	    fprintf(fp, "Y, %d", pid);
+        fclose(fp);
+
+        printf("wake up\n");
     }
 
     fp = fopen("/proc/mp2/status", "w");
-	fprintf(fp, "D,%d", pid);
+	fprintf(fp, "D, %d", pid);
 	
     return 0;
 }

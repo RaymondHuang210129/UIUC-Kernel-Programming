@@ -15,7 +15,7 @@ modules:
 	$(MAKE) -C $(KERNEL_SRC) M=$(SUBDIR) modules
 
 app: userapp.c userapp.h
-	$(GCC) -o userapp userapp.c
+	$(GCC) -o userapp userapp.c -g
 
 clean:
 	$(RM) -f userapp *~ *.ko *.o *.mod.c Module.symvers modules.order
