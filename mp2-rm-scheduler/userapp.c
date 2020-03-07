@@ -1,9 +1,10 @@
 #include "userapp.h"
 
 int main(int argc, char* argv[]) 
-{
-    int period = atoi(argv[1]);
-    int comp_time = atoi(argv[2]);
+{   
+    int period;
+    int comp_time;
+    int iteration;
     
     int pid = getpid();
 	FILE * fp;
@@ -14,8 +15,17 @@ int main(int argc, char* argv[])
     ssize_t expected_size = 0;
     int is_registered = 0;
     struct timeval start_time, end_time;
-	int round, i;
+	int i, round;
 	unsigned long factorial = 1;
+
+    if (argc < 4)
+    {
+        printf("usage: [period] [computation_time] [number of job]\n");
+        return 0;
+    }
+    period = atoi(argv[1]);
+    comp_time = atoi(argv[2]);
+    iteration = atoi(argv[3]);
 	
     /* section: register the process */
     fp = fopen("/proc/mp2/status", "w");
@@ -57,7 +67,7 @@ int main(int argc, char* argv[])
     system("cat /proc/uptime");
 
     /* section: job */
-    for (round = 0; round < 5; round++) 
+    for (round = 0; round < iteration; round++) 
     {
         /* section: start factorial computation */
         gettimeofday(&start_time, NULL);
@@ -67,12 +77,6 @@ int main(int argc, char* argv[])
         {
             factorial *= i;
             gettimeofday(&end_time, NULL);
-            //if ((end_time.tv_sec * 1000000 + end_time.tv_usec) - (start_time.tv_sec * 1000000 + start_time.tv_usec) > (comp_time * 1000))
-            //{
-            //    printf("round %d factorial: %d!\n", round, i);
-            //    //printf("process has waken for %f second\n", (end_time.tv_sec + end_time.tv_usec * 0.000001) - (start_time.tv_sec+ start_time.tv_usec * 0.000001));
-            //    break;
-            //}
         }
 
         /* section: yield */
