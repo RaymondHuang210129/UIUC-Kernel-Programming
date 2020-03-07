@@ -16,6 +16,8 @@
 
 #include <linux/kthread.h>
 
+#include <linux/ktime.h>
+
 #include "mp2_given.h"
 
 MODULE_LICENSE("GPL");
@@ -30,6 +32,7 @@ struct mp2_process_entry {
     struct list_head ptrs;
     struct task_struct * linux_task;
     struct timer_list wakeup_timer;
+    int timer_postpone;
     unsigned long pid;
     unsigned long period;
     unsigned long comp_time;
@@ -58,6 +61,7 @@ static struct kmem_cache * mp2_process_entries_slab = NULL;
 static struct list_head mp2_process_entries;
 
 DEFINE_MUTEX(process_list_mutex);
+DEFINE_MUTEX(yield_mutex);
 
 static const struct file_operations mp2_fops = {
     .owner = THIS_MODULE,
@@ -70,6 +74,7 @@ static const struct file_operations mp2_fops = {
 
 static struct task_struct * dispatching_thread;
 static struct mp2_process_entry * running_process = NULL;
+static struct timespec64 current_time;
 
 /* section: function definition */
 
@@ -96,19 +101,37 @@ static int mp2_open(struct inode *inode, struct file *file)
 static void timer_callback(unsigned long data)
 {
     /* warning: in interrupt context */
-    //struct sched_param sparam;
 
     struct mp2_process_entry * process = (struct mp2_process_entry *)data;
-    printk(KERN_ALERT "process %ld timer callback\n", process->pid);
-    //mod_timer(&process->wakeup_timer, jiffies + msecs_to_jiffies(process->period));
-    //set_task_state(process->linux_task, TASK_RUNNING);
-    process->state = TASK_RUNNING;
-    process->timer_arrive_time = jiffies;
-    //sparam.sched_priority = 0;
-    //sched_setscheduler(process->linux_task, SCHED_NORMAL, &sparam);
-    if (!wake_up_process(dispatching_thread))
+    if (process->timer_postpone == 1)
     {
-        printk(KERN_ALERT "already running");
+        if (!wake_up_process(dispatching_thread))
+        {
+            mod_timer(&process->wakeup_timer, jiffies + msecs_to_jiffies(2));
+        }
+        else
+        {
+            process->timer_postpone = 0;
+            printk(KERN_ALERT "tmcbk: %ld: postponed timer wake up dispatch thread\n", process->pid);
+        }
+        
+    } 
+    else
+    {
+        printk(KERN_ALERT "tmcbk: %ld: execute timer callback\n", process->pid);
+        process->state = TASK_RUNNING;
+        //process->timer_arrive_time = jiffies;
+        if (!wake_up_process(dispatching_thread))
+        {
+            printk(KERN_ALERT "tmcbk: %ld: dispatch thread is running, postpone 2 ms.\n", process->pid);
+            process->timer_postpone = 1;
+            mod_timer(&process->wakeup_timer, jiffies + msecs_to_jiffies(2));
+        }
+        else
+        {
+            printk(KERN_ALERT "tmcbk: %ld: timer wake up dispatch thread\n", process->pid);
+        }
+        
     }
 }
 
@@ -145,59 +168,63 @@ static int registration(unsigned long pid, unsigned long period, unsigned long c
 
 static int yield_cpu(unsigned long pid)
 {
-    //struct task_struct * yield_process = find_task_by_pid((unsigned int) pid);
     struct list_head *pos, *q;
     struct mp2_process_entry *tmp;
+
+    mutex_lock(&process_list_mutex);
     list_for_each_safe(pos, q, &mp2_process_entries)
     {
         tmp = list_entry(pos, struct mp2_process_entry, ptrs);
         if (tmp->pid == pid)
         {
-            mutex_lock(&process_list_mutex);
             if (jiffies < tmp->timer_arrive_time + msecs_to_jiffies(tmp->period))
             {
                 mod_timer(&tmp->wakeup_timer, tmp->timer_arrive_time + msecs_to_jiffies(tmp->period));
+                tmp->timer_arrive_time = tmp->timer_arrive_time + msecs_to_jiffies(tmp->period);
+                tmp->timer_postpone = 0;
             }
             else
             {
-                printk(KERN_ALERT "deadline has passed.");
+                printk(KERN_ALERT "yield: %ld: deadline has passed, reschedule.", pid);
+                mod_timer(&tmp->wakeup_timer, jiffies + msecs_to_jiffies(tmp->period));
+                tmp->timer_arrive_time = jiffies + msecs_to_jiffies(tmp->period);
+                tmp->timer_postpone = 0;
             }
-            
-            if (running_process != NULL && running_process->pid == pid)
-            {
-                printk(KERN_ALERT "yield again\n");
-            } 
-            else
-            {
-                printk(KERN_ALERT "first call yield");
-            }
-            
+            tmp->state = TASK_INTERRUPTIBLE;
+            set_task_state(tmp->linux_task, TASK_INTERRUPTIBLE);
             mutex_unlock(&process_list_mutex);
-            running_process = NULL;
+
             goto success;
         }
     }
+    mutex_unlock(&process_list_mutex);
     return -1;
 
 success:
-    /* section: put the process into sleep and wake up dispatching thread */
-    tmp->state = TASK_IDLE;
-    set_task_state(tmp->linux_task, TASK_IDLE);
-    if (tmp->linux_task->state == TASK_IDLE)
+    if (running_process != NULL && running_process->pid == pid)
     {
-        printk(KERN_ALERT"set sleep success\n");
+        printk(KERN_ALERT "yield: %ld: yield again\n", pid);
+        running_process = NULL;
+        //while(!wake_up_process(dispatching_thread));
+        if (wake_up_process(dispatching_thread))
+        {
+            printk(KERN_ALERT"yield: %ld: dispatch is already running\n", pid);
+        }
+        else
+        {
+            printk(KERN_ALERT"yield: %ld: wake up dispatch success\n", pid);
+        }
     }
     else
     {
-        printk(KERN_ALERT"sleep failed\n");
-        return -1;
+        printk(KERN_ALERT "yield: %ld: first call yield", pid);
     }
+
+    ktime_get_ts64(&current_time);
+    printk(KERN_ALERT "yield: %ld: sleep process pid %lu, time=%ld\n", pid, tmp->pid, current_time.tv_sec);
     schedule();
-    if (!wake_up_process(dispatching_thread))
-    {
-        printk(KERN_ALERT "already running");
-    }
-    printk(KERN_ALERT "sleep process pid %lu\n", tmp->pid);
+    ktime_get_ts64(&current_time);
+    printk(KERN_ALERT "yield: %ld: immediately, time=%ld", pid, current_time.tv_sec);
     return 0;
 }
 
@@ -214,12 +241,13 @@ static int deregistration(unsigned long pid)
         if (tmp->pid == pid)
         {
             /* section: delete timer, delete node, and break */
-            printk(KERN_ALERT "delete timer of PID %ld\n", tmp->pid);
+            printk(KERN_ALERT "drgst: %ld: delete timer\n", tmp->pid);
             del_timer_sync(&tmp->wakeup_timer);
-            printk(KERN_ALERT "delete entry PID %ld\n", tmp->pid);
+            printk(KERN_ALERT "drgst: %ld: delete entry\n", tmp->pid);
             list_del(pos);
             kmem_cache_free(mp2_process_entries_slab, tmp);
             mutex_unlock(&process_list_mutex);
+            while(!wake_up_process(dispatching_thread));
             return 0;
         }
     }  
@@ -301,9 +329,8 @@ static int dispatching_func(void * data)
     schedule();
     while(!kthread_should_stop())
     {
-        printk(KERN_ALERT "dispatching thread: activated\n");
+        printk(KERN_ALERT "dspch: activated\n");
         /* note: thread is awaked */
-        printk(KERN_ALERT "dispatching thread: current running TLB addr: %p", running_process);
 
         /* section: find the process which has largest priority */
         shortest_period = ULONG_MAX;
@@ -314,24 +341,28 @@ static int dispatching_func(void * data)
         list_for_each_safe(pos, q, &mp2_process_entries)
         {
             tmp = list_entry(pos, struct mp2_process_entry, ptrs);
-            printk(KERN_ALERT "dispatching thread: process pid %lu state %ld\n", tmp->pid, tmp->state);
+            printk(KERN_ALERT "dspch: process pid %lu state %ld\n", tmp->pid, tmp->state);
             if (tmp->state == TASK_RUNNING)
             {
-                printk(KERN_ALERT "dispatching thread: process pid %lu can be run\n", tmp->pid);
+                printk(KERN_ALERT "dspch: process pid %lu can be run, period %lu\n", tmp->pid, tmp->period);
                 if (tmp->period < shortest_period)
                 {
                     shortest_period = tmp->period;
                     highest_task = tmp;
+                    printk(KERN_ALERT "dspch: higher priority: %lu\n", tmp->pid);
                 }
             }
         }
 
+        mutex_unlock(&process_list_mutex);
+
         /* section: sleep the running process (if any) */
-        if (running_process != NULL)
+        if (running_process != NULL && find_task_by_pid((unsigned int)running_process->pid) != NULL)
         {
             sparam_sleep.sched_priority = 0;
             sched_setscheduler(running_process->linux_task, SCHED_NORMAL, &sparam_sleep);
-            printk(KERN_ALERT "stopping process pid %ld\n", running_process->pid);
+            printk(KERN_ALERT "dspch: stopping process pid %ld\n", running_process->pid);
+            running_process = NULL;
         }
         /* section: wake up the ready process (if any) */
         if (highest_task != NULL)
@@ -342,15 +373,12 @@ static int dispatching_func(void * data)
             {
                 printk("error\n");
             }
-            schedule();
             running_process = highest_task;
-            printk(KERN_ALERT "dispatching thread: waking process pid %lu\n", highest_task->pid);
+            printk(KERN_ALERT "dspch: waking process pid %lu\n", highest_task->pid);
         }
 
-        mutex_unlock(&process_list_mutex);
-
         set_current_state(TASK_INTERRUPTIBLE);
-        printk(KERN_ALERT "dispatch thread: sleep now\n");
+        printk(KERN_ALERT "dspch: sleep now\n");
         schedule();        
     }
     return 0;

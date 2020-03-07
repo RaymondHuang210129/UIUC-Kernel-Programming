@@ -53,7 +53,8 @@ int main(int argc, char* argv[])
 	fprintf(fp, "Y, %d", pid);
     fclose(fp);
 
-    printf("wake up\n");
+    printf("wake up -------------- %d\n", pid);
+    system("cat /proc/uptime");
 
     /* section: job */
     for (round = 0; round < 5; round++) 
@@ -62,25 +63,28 @@ int main(int argc, char* argv[])
         gettimeofday(&start_time, NULL);
         factorial = 1;
         
-        for (i = 1;; i++) 
+        for (i = 1; i < 50000 * comp_time; i++) 
         {
             factorial *= i;
             gettimeofday(&end_time, NULL);
-            if ((end_time.tv_sec * 1000000 + end_time.tv_usec) - (start_time.tv_sec * 1000000 + start_time.tv_usec) > (comp_time * 1000))
-            {
-                printf("round %d factorial: %d!\n", round, i);
-                break;
-            }
+            //if ((end_time.tv_sec * 1000000 + end_time.tv_usec) - (start_time.tv_sec * 1000000 + start_time.tv_usec) > (comp_time * 1000))
+            //{
+            //    printf("round %d factorial: %d!\n", round, i);
+            //    //printf("process has waken for %f second\n", (end_time.tv_sec + end_time.tv_usec * 0.000001) - (start_time.tv_sec+ start_time.tv_usec * 0.000001));
+            //    break;
+            //}
         }
 
         /* section: yield */
-        printf("go to sleep\n");
+        system("cat /proc/uptime");
+        printf("go to sleep ------------------ %d\n", pid);
 
         fp = fopen("/proc/mp2/status", "w");
 	    fprintf(fp, "Y, %d", pid);
         fclose(fp);
 
-        printf("wake up\n");
+        printf("wake up ------------------ %d\n", pid);
+        system("cat /proc/uptime");
     }
 
     fp = fopen("/proc/mp2/status", "w");
