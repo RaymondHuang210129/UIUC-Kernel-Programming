@@ -15,7 +15,9 @@
 static int buf_fd = -1;
 static int buf_len;
 
-// This function opens a character device (which is pointed by a file named as fname) and performs the mmap() operation. If the operations are successful, the base address of memory mapped buffer is returned. Otherwise, a NULL pointer is returned.
+/** This function opens a character device (which is pointed by a file named as fname) and performs the mmap() operation.
+ *  If the operations are successful, the base address of memory mapped buffer is returned. Otherwise, a NULL pointer is returned.
+ **/
 void *buf_init(char *fname)
 {
   unsigned int *kadr;
