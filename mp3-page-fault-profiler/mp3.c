@@ -16,6 +16,7 @@
 #include <linux/ktime.h>
 #include <linux/vmalloc.h>
 #include <linux/mm.h>
+#include <linux/cdev.h>
 
 #include "mp3_given.h"
 
@@ -40,6 +41,7 @@ struct mp3_process_entry {
     unsigned long utilization;
     unsigned long major_fault_count;
     unsigned long minor_fault_count;
+    unsigned long previous_jiffies;
 };
 
 struct mp3_statistic {
@@ -52,8 +54,11 @@ struct mp3_statistic {
 /* section: function delcaration */
 
 static int mp3_show(struct seq_file * m, void * v);
-static int mp3_open(struct inode *inode, struct file *file);
-static ssize_t mp3_write(struct file * file, const char __user * ubuf, size_t size, loff_t * pos);
+static int mp3_proc_open(struct inode *inode, struct file *file);
+static ssize_t mp3_proc_write(struct file * file, const char __user * ubuf, size_t size, loff_t * pos);
+static int mp3_cdev_open(struct inode *inode, struct file *file);
+static int mp3_cdev_release(struct inode *inode, struct file *file);
+static int mp3_cdev_mmap(struct file * file, struct vm_area_struct * vma);
 static void mp3_work_function(struct work_struct * work);
 static void timer_callback(unsigned long data);
 static int registration(unsigned long pid);
@@ -66,22 +71,32 @@ static struct proc_dir_entry * mp3_dir;
 static char * input_str;
 
 static struct kmem_cache * mp3_process_entries_slab = NULL;
-static struct mp3_statistic * profiler_buffer = NULL;
+static char * profiler_buffer = NULL;
+static char * profiler_buffer_offset = NULL;
 static struct list_head mp3_process_entries;
 
 DEFINE_MUTEX(process_list_mutex);
 
 static struct timer_list * mp3_timer = NULL;
-struct work_struct * deferred_work;
+static struct work_struct * deferred_work;
 static struct workqueue_struct * mp3_workqueue;
 
-static const struct file_operations mp3_fops = {
+static int cdev_major;
+
+static const struct file_operations mp3_proc_fops = {
     .owner = THIS_MODULE,
-    .open = mp3_open,
+    .open = mp3_proc_open,
     .read = seq_read,
     .llseek = seq_lseek,
     .release = single_release,
-    .write = mp3_write
+    .write = mp3_proc_write
+};
+
+static const struct file_operations mp3_cdev_fops = {
+    .owner = THIS_MODULE,
+    .open = mp3_cdev_open,
+    .release = mp3_cdev_release,
+    .mmap = mp3_cdev_mmap
 };
 
 /* section: function definition */
@@ -101,7 +116,7 @@ static int mp3_show(struct seq_file * m, void * v)
     return 0;
 }
 
-static int mp3_open(struct inode *inode, struct file *file)
+static int mp3_proc_open(struct inode *inode, struct file *file)
 {
     return single_open(file, mp3_show, NULL);
 }
@@ -110,16 +125,40 @@ static void mp3_work_function(struct work_struct * work)
 {
     struct list_head *pos, *q;
     struct mp3_process_entry *tmp;
+    struct mp3_statistic statistic;
+    unsigned long utime, stime;
     printk(KERN_ALERT "work function activated.\n");
     mutex_lock(&process_list_mutex);
     list_for_each_safe(pos, q, &mp3_process_entries)
     {
         tmp = list_entry(pos, struct mp3_process_entry, ptrs);
+        if (get_cpu_use((int)tmp->pid, &statistic.minor_fault_count, &statistic.major_fault_count, &utime, &stime))
+        {
+            printk(KERN_ALERT "Process %ld DNE. Is it dummy?\n", tmp->pid);
+        }
+        else
+        {
+            statistic.current_jiffies = jiffies;
+            statistic.utilization = (utime + stime) * 100 / (jiffies - tmp->previous_jiffies);
+            if (profiler_buffer_offset != NULL && profiler_buffer_offset != profiler_buffer + 128 * PAGE_SIZE)
+            {
+                *(struct mp3_statistic *)profiler_buffer_offset = statistic;
+                profiler_buffer_offset += sizeof(struct mp3_statistic);
+            }
+            else
+            {
+                printk(KERN_ALERT "buffer is full.\n");
+            }
+            
+        }
+        
+
     }
     mutex_unlock(&process_list_mutex);
 }
 
-static void timer_callback(unsigned long data) {
+static void timer_callback(unsigned long data) 
+{
     /* section: generate new work */
     /* note: this function is processed in interrupt context */
     mod_timer(mp3_timer, jiffies + msecs_to_jiffies(50));
@@ -162,6 +201,7 @@ static int registration(unsigned long pid)
         deferred_work = kzalloc(sizeof(struct work_struct), GFP_KERNEL);
         INIT_WORK(deferred_work, mp3_work_function);
         mp3_workqueue = create_workqueue("mp3_workqueue");
+        profiler_buffer_offset = profiler_buffer;
     }
 
     mutex_unlock(&process_list_mutex);
@@ -195,6 +235,7 @@ static int deregistration(unsigned long pid)
                 del_timer_sync(mp3_timer);
                 kfree(mp3_timer);
                 mp3_timer = NULL;
+                profiler_buffer_offset = NULL;
             }
 
             mutex_unlock(&process_list_mutex);
@@ -207,7 +248,7 @@ static int deregistration(unsigned long pid)
     return 1;
 }
 
-static ssize_t mp3_write(struct file * file, const char __user * ubuf, size_t size, loff_t * pos)
+static ssize_t mp3_proc_write(struct file * file, const char __user * ubuf, size_t size, loff_t * pos)
 {
     long pid = 0;
     char m; // message type, "R", "Y", or "D"
@@ -253,8 +294,35 @@ static ssize_t mp3_write(struct file * file, const char __user * ubuf, size_t si
     return (ssize_t)size;
 }
 
+static int mp3_cdev_open(struct inode *inode, struct file *file)
+{
+    try_module_get(THIS_MODULE);
+    return 0;
+}
+
+static int mp3_cdev_release(struct inode *inode, struct file *file)
+{
+    module_put(THIS_MODULE);
+    return 0;
+}
+
+static int mp3_cdev_mmap(struct file * file, struct vm_area_struct * vma)
+{
+    unsigned long pfn, i;
+    for (i = 0; i < 128 * PAGE_SIZE; i += PAGE_SIZE)
+    {
+        pfn = vmalloc_to_pfn(profiler_buffer + i);
+        if (remap_pfn_range(vma, (vma->vm_start + i * PAGE_SIZE), pfn, PAGE_SIZE, vma->vm_page_prot))
+        {
+            printk(KERN_ALERT "error remapping %ld", i);
+        }
+    }
+    return 0;
+}
+
 int __init mp3_init(void)
 {
+    int i;
     #ifdef DEBUG
     printk(KERN_ALERT "MP3 MODULE LOADING\n");
     #endif
@@ -264,7 +332,7 @@ int __init mp3_init(void)
 
     /* section: create target proc file */
     mp3_dir = proc_mkdir("mp3", NULL);
-    mp3_proc = proc_create("status", 0777, mp3_dir, &mp3_fops);
+    mp3_proc = proc_create("status", 0777, mp3_dir, &mp3_proc_fops);
 
     /* section: create slab */
     mp3_process_entries_slab = kmem_cache_create("mp3_process_struct slab", sizeof(struct mp3_process_entry), 0, SLAB_HWCACHE_ALIGN, NULL);
@@ -274,9 +342,16 @@ int __init mp3_init(void)
     mp3_process_entries.next = &mp3_process_entries;
     mp3_process_entries.prev = &mp3_process_entries;
 
-    /*section: create memory buffer */
-    profiler_buffer = vmalloc(sizeof(struct mp3_statistic) * 12000);
-    //SetPageReserved()
+    /* section: create memory buffer */
+    profiler_buffer = vmalloc(PAGE_SIZE * 128);
+    for (i = 0; i < 128 * PAGE_SIZE; i += PAGE_SIZE)
+    {
+        SetPageReserved(vmalloc_to_page(profiler_buffer + i));
+    }
+
+    /* section: create character decvice */
+    cdev_major = register_chrdev(0, "node", &mp3_cdev_fops);
+    
 
     printk(KERN_ALERT "MP3 MODULE LOADED\n");
     return 0;
@@ -286,6 +361,7 @@ void __exit mp3_exit(void)
 {
     struct list_head *pos, *q;
     struct mp3_process_entry *tmp;
+    int i;
     
     /* section: free global pointers */
 	if (input_str != NULL)
@@ -294,6 +370,9 @@ void __exit mp3_exit(void)
 		kfree(input_str);
 		input_str = NULL;
 	}
+
+    /* section: delete character device */
+    unregister_chrdev(cdev_major, "node");
 
     /* section: stop workqueue and deregistrate all processes */
     mutex_lock(&process_list_mutex);
@@ -319,6 +398,10 @@ void __exit mp3_exit(void)
     kmem_cache_destroy(mp3_process_entries_slab);
 
     /* section: free memory buffer */
+    for (i = 0; i < 128 * PAGE_SIZE; i += PAGE_SIZE)
+    {
+        ClearPageReserved(vmalloc_to_page(profiler_buffer + i));
+    }
     vfree(profiler_buffer);
 
     /* section: remove target proc file */
