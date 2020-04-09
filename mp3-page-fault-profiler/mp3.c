@@ -130,6 +130,8 @@ static void mp3_work_function(struct work_struct * work)
     unsigned long utime, stime;
     printk(KERN_ALERT "work function activated.\n");
     mutex_lock(&process_list_mutex);
+
+    /* section: print out each process's minor page fault and major page fault */
     list_for_each_safe(pos, q, &mp3_process_entries)
     {
         tmp = list_entry(pos, struct mp3_process_entry, ptrs);
@@ -318,6 +320,8 @@ static int mp3_cdev_release(struct inode *inode, struct file *file)
 static int mp3_cdev_mmap(struct file * file, struct vm_area_struct * vma)
 {
     unsigned long pfn, i;
+    /* section: mapping the valloc memory to userspace */
+    /* note: memory allocated by valloc can be discontinuous, each page should be mapped respectively */
     for (i = 0; i < 128 * PAGE_SIZE; i += PAGE_SIZE)
     {
         pfn = vmalloc_to_pfn(profiler_buffer + i);
@@ -353,6 +357,7 @@ int __init mp3_init(void)
 
     /* section: create memory buffer */
     profiler_buffer = vmalloc(PAGE_SIZE * 128);
+    /* note: prevent each page from  */
     for (i = 0; i < 128 * PAGE_SIZE; i += PAGE_SIZE)
     {
         SetPageReserved(vmalloc_to_page(profiler_buffer + i));
@@ -360,10 +365,6 @@ int __init mp3_init(void)
 
     /* section: create character decvice */
     cdev_major = register_chrdev(0, "node", &mp3_cdev_fops);
-    //mp3_cdev = cdev_alloc();
-    //cdev_init(mp3_cdev, &mp3_cdev_fops);
-    //cdev_add(mp3_dev, (dev_t)cdev_major, 0);
-    
 
     printk(KERN_ALERT "MP3 MODULE LOADED\n");
     return 0;
@@ -397,6 +398,7 @@ void __exit mp3_exit(void)
         kfree(mp3_timer);
         mp3_timer = NULL;
     }
+
     list_for_each_safe(pos, q, &mp3_process_entries)
     {
         tmp = list_entry(pos, struct mp3_process_entry, ptrs);
