@@ -81,6 +81,7 @@ static struct timer_list * mp3_timer = NULL;
 static struct work_struct * deferred_work;
 static struct workqueue_struct * mp3_workqueue;
 
+static struct cdev mp3_cdev;
 static int cdev_major;
 
 static const struct file_operations mp3_proc_fops = {
@@ -135,6 +136,7 @@ static void mp3_work_function(struct work_struct * work)
         if (get_cpu_use((int)tmp->pid, &statistic.minor_fault_count, &statistic.major_fault_count, &utime, &stime))
         {
             printk(KERN_ALERT "Process %ld DNE. Is it dummy?\n", tmp->pid);
+            list_del(pos);
         }
         else
         {
@@ -168,6 +170,7 @@ static void timer_callback(unsigned long data)
 static int registration(unsigned long pid)
 {   
     struct mp3_process_entry * new_process;
+    int i;
 
     /* section: create new process node */
     new_process = kmem_cache_alloc(mp3_process_entries_slab, GFP_KERNEL);
@@ -201,6 +204,10 @@ static int registration(unsigned long pid)
         deferred_work = kzalloc(sizeof(struct work_struct), GFP_KERNEL);
         INIT_WORK(deferred_work, mp3_work_function);
         mp3_workqueue = create_workqueue("mp3_workqueue");
+        for (i = 0; i < PAGE_SIZE * 128; i += sizeof(unsigned long))
+        {
+            *(unsigned long *)(profiler_buffer + i) = -1;
+        }
         profiler_buffer_offset = profiler_buffer;
     }
 
@@ -252,29 +259,31 @@ static ssize_t mp3_proc_write(struct file * file, const char __user * ubuf, size
 {
     long pid = 0;
     char m; // message type, "R", "Y", or "D"
-    
-    if (input_str != NULL) {
-		kfree(input_str);
-		input_str = NULL;
-	}
 
-	input_str = kzalloc(size + 1, GFP_KERNEL);
+    if (input_str != NULL)
+    {
+        kfree(input_str);
+        input_str = NULL;
+    }
+
+    input_str = kzalloc(size + 1, GFP_KERNEL);
     if (input_str == NULL)
-	{
-		printk(KERN_ALERT "unable to kzalloc.\n");
-		return -ENOMEM;
-	}
+    {
+        printk(KERN_ALERT "unable to kzalloc.\n");
+        return -ENOMEM;
+    }
 
-	if (copy_from_user(input_str, ubuf, size))
-	{
-		printk(KERN_ALERT "copy from user error.\n");
-		return EFAULT;
-	}
+    if (copy_from_user(input_str, ubuf, size))
+    {
+        printk(KERN_ALERT "copy from user error.\n");
+        return EFAULT;
+    }
 
     /* section: identify command */
     sscanf(input_str, "%c%*[,] %lu", &m, &pid);
 
-    switch(m){
+    switch (m)
+    {
     case 'R':
         if (registration(pid))
         {
@@ -282,7 +291,7 @@ static ssize_t mp3_proc_write(struct file * file, const char __user * ubuf, size
         }
         break;
     case 'U':
-        if(deregistration(pid))
+        if (deregistration(pid))
         {
             printk(KERN_ALERT "deregistration failed\n");
         }
@@ -312,7 +321,7 @@ static int mp3_cdev_mmap(struct file * file, struct vm_area_struct * vma)
     for (i = 0; i < 128 * PAGE_SIZE; i += PAGE_SIZE)
     {
         pfn = vmalloc_to_pfn(profiler_buffer + i);
-        if (remap_pfn_range(vma, (vma->vm_start + i * PAGE_SIZE), pfn, PAGE_SIZE, vma->vm_page_prot))
+        if (remap_pfn_range(vma, (vma->vm_start + i), pfn, PAGE_SIZE, vma->vm_page_prot))
         {
             printk(KERN_ALERT "error remapping %ld", i);
         }
@@ -351,6 +360,9 @@ int __init mp3_init(void)
 
     /* section: create character decvice */
     cdev_major = register_chrdev(0, "node", &mp3_cdev_fops);
+    //mp3_cdev = cdev_alloc();
+    //cdev_init(mp3_cdev, &mp3_cdev_fops);
+    //cdev_add(mp3_dev, (dev_t)cdev_major, 0);
     
 
     printk(KERN_ALERT "MP3 MODULE LOADED\n");
@@ -409,6 +421,8 @@ void __exit mp3_exit(void)
 	remove_proc_entry("status", mp3_dir);
     printk(KERN_ALERT "removing 'mp3'");
 	remove_proc_entry("mp3", NULL);
+
+
 
     printk(KERN_ALERT "MP3 MODULE UNLOADED\n");
 }

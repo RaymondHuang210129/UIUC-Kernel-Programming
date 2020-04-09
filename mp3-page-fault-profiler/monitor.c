@@ -2,6 +2,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/types.h>
@@ -25,7 +26,7 @@ void *buf_init(char *fname)
   if(buf_fd == -1){
     buf_len = NPAGES * getpagesize();
     if ((buf_fd=open(fname, O_RDWR|O_SYNC))<0){
-        printf("file open error. %s\n", fname);
+        printf("file open error. %s, %d\n", fname, errno);
         return NULL;
     }
   }
