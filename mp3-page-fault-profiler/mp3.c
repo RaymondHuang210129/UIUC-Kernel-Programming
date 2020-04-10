@@ -139,11 +139,25 @@ static void mp3_work_function(struct work_struct * work)
         {
             printk(KERN_ALERT "Process %ld DNE. Is it dummy?\n", tmp->pid);
             list_del(pos);
+
+            /* section: delete workqueue (if process list is empty) */
+            if (list_empty(&mp3_process_entries))
+            {
+                flush_workqueue(mp3_workqueue);
+                destroy_workqueue(mp3_workqueue);
+                kfree(deferred_work);
+                del_timer_sync(mp3_timer);
+                kfree(mp3_timer);
+                mp3_timer = NULL;
+                profiler_buffer_offset = NULL;
+            }
         }
         else
         {
             statistic.current_jiffies = jiffies;
+            //printk(KERN_ALERT "utime+stime %lu delta jiffies %lu", (utime + stime), (jiffies - tmp->previous_jiffies));
             statistic.utilization = (utime + stime) * 100 / (jiffies - tmp->previous_jiffies);
+            tmp->previous_jiffies = jiffies;
             if (profiler_buffer_offset != NULL && profiler_buffer_offset != profiler_buffer + 128 * PAGE_SIZE)
             {
                 *(struct mp3_statistic *)profiler_buffer_offset = statistic;
