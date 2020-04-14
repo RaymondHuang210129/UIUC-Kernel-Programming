@@ -25,20 +25,31 @@ Analysis:
 Following figures illustrates the different extent of multi-programming that all of them execute with random-based, 200MB access policy:
 
 1 process executes at a time:
+
 <img src="https://i.imgur.com/9MzpRYi.png" width="250">
+
 5 processes execute at a time:
+
 <img src="https://i.imgur.com/w4h22KF.png" width="250">
+
 11 processes execute at a time:
+
 <img src="https://i.imgur.com/vDIa0Ez.png" width="250">
 
 These executions does not show the significant difference. So, I tried the more aggressive memory utilization: random-based, 512MB access policy:
 
 1 process executes at a time:
+
 <img src="https://i.imgur.com/Y5bg3mY.png" width="250">
+
 5 processes execute at a time:
+
 <img src="https://i.imgur.com/ZEPjWy1.png" width="250">
+
 10 processes execute at a time:
+
 <img src="https://i.imgur.com/qhp2RYx.png" width="250">
+
 Note that executes 11 processes execute in the same time will trigger OOM to kill the process since the total memory usage is exceed the pysical memory too much (5.5GB/4GB).
 
 Interestingly, the major fault counts starts to tremendously increase at the later interations, and the utilization of processes are also drastically increased. This is certainly because that the system started to swap for giving more virtual memory to process that is more than pysical memory. Note that the minor page fault does not have significant change since the major fault start because that the major faults are usually triggered when system tries to deal with minor faults but the page does not exist in the DRAM.
