@@ -10,12 +10,12 @@
 
 /* mp4 labels along with their semantics */
 #define MP4_NO_ACCESS 0      /* may not be accessed by target,
-			      * but may by everyone else */
+                              * but may by everyone else */
 #define MP4_READ_OBJ 1       /* object may be read by anyone */
 #define MP4_READ_WRITE 2     /* object may read/written/appended by the target,
-			      * but can only be read by others */
+                              * but can only be read by others */
 #define MP4_WRITE_OBJ 3      /* object may be written/appended by the target,
-			      * but not read, and only read by others */
+                              * but not read, and only read by others */
 #define MP4_EXEC_OBJ 4       /* object may be read and executed by all */
 
 /* NOTE: FOR DIRECTORIES, ONLY CHECK ACCESS FOR THE TARGET SID, ALL OTHER NON
