@@ -1,3 +1,3 @@
 setfattr -n security.mp4 -v target /usr/bin/passwd
-setfattr -n security.mp4 -v dir /etc
-setfattr -n security.mp4 -v read-only /etc/shadow
+setfattr -n security.mp4 -v read-write /etc/shadow
+setfattr -n security.mp4 -v dir-write /etc
