@@ -1,0 +1,3 @@
+setfattr -x security.mp4 /usr/bin/passwd
+setfattr -x security.mp4 /etc
+setfattr -x security.mp4 /etc/shadow
