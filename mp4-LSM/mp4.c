@@ -28,6 +28,14 @@ static int get_inode_sid(struct inode *inode)
     int return_value;
     int mp4_label;
     char * context = NULL;
+    if (!inode || !inode->i_op)
+    {
+        return -EOPNOTSUPP;
+    }
+    if (!inode->i_op->getxattr)
+    {
+        return MP4_NO_ACCESS;
+    }
     if (!new_dentry)
     {
         pr_err(KERN_ALERT "d_find_alias return NULL");
@@ -69,17 +77,25 @@ static int get_inode_sid(struct inode *inode)
  */
 static int mp4_bprm_set_creds(struct linux_binprm *bprm)
 {
-    const struct cred * old_cred = current_cred();
-    struct cred * new_cred = bprm->cred;
-    struct inode * new_inode = file_inode(bprm->file);
+    const struct cred * old_cred;
+    struct cred * new_cred;
+    struct inode * new_inode;
     int mp4_label;
 
-    mp4_label = get_inode_sid(new_inode);
-    if (mp4_label == -1)
+    old_cred = current_cred();
+    new_cred = bprm->cred;
+    new_inode = file_inode(bprm->file);
+    if (!old_cred || !new_cred || !new_inode)
     {
-        pr_err(KERN_ALERT "get_inode_sid return -1");
+        pr_err("bprm error.\n");
+        return 0;
     }
-    ((struct mp4_security *)new_cred->security)->mp4_flags = mp4_label;
+
+    mp4_label = get_inode_sid(new_inode);
+    if (mp4_label == MP4_TARGET_SID)
+    {
+        ((struct mp4_security *)new_cred->security)->mp4_flags = mp4_label;
+    }
     return 0;
 }
 
@@ -123,11 +139,26 @@ static void mp4_cred_free(struct cred *cred)
 static int mp4_cred_prepare(struct cred *new, const struct cred *old,
                             gfp_t gfp)
 {
-    const struct mp4_security * old_sec = old->security;
-    struct mp4_security * mp4_sec = kmemdup(old_sec, sizeof(struct mp4_security), gfp);
-    if (!mp4_sec) return -ENOMEM;
-    new->security = mp4_sec;
-    return 0;
+    const struct mp4_security *old_tsec;
+	struct mp4_security *tsec;
+
+	old_tsec = old->security;
+
+    if (!old_tsec)
+    {
+        tsec = kzalloc(sizeof(struct mp4_security), gfp);
+        if (!tsec) return -ENOMEM;
+    }
+    else
+    {
+        tsec = kmemdup(old_tsec, sizeof(struct mp4_security), gfp);
+        if (!tsec) return -ENOMEM;
+    }
+	if (!tsec)
+		return -ENOMEM;
+
+	new->security = tsec;
+	return 0;
 }
 
 /**
@@ -189,39 +220,12 @@ static int mp4_inode_init_security(struct inode *inode, struct inode *dir,
         {
             *value = "read-write";
             *len = 11;
-        }
-        
+        }   
     }
     else
     {
         return 0;
     }
-    
-    
-
-
-
-
-    {
-        if (!inode->i_security)
-        {
-            // todo: malloc
-            inode->i_security = kmalloc(sizeof(struct mp4_security), GFP_KERNEL);
-            if (!inode->i_security)
-            {
-                pr_err(KERN_ALERT "malloc failed");
-                return -ENOMEM;
-            }
-        }
-        ((struct mp4_security *)inode->i_security)->mp4_flags = MP4_READ_WRITE;
-        
-        
-    }
-    
-
-
-
-    
     return 0;
 }
 
@@ -235,11 +239,76 @@ static int mp4_inode_init_security(struct inode *inode, struct inode *dir,
  * returns 0 is access granter, -EACCES otherwise
  *
  */
-//static int mp4_has_permission(int ssid, int osid, int mask)
-//{
-//    if (ssid == MP4_TARGET_SID)
-//    return 0;
-//}
+static int mp4_has_permission(int ssid, int osid, int mask)
+{
+    mask &= (MAY_READ|MAY_WRITE|MAY_EXEC|MAY_APPEND|MAY_ACCESS);
+    if (osid == MP4_NO_ACCESS) {
+        if (ssid == MP4_TARGET_SID) {
+            return -EACCES; /* note: not able to access by target */
+        } else {
+            return 0; /* note: able to access by every else */
+        }   
+    }
+    else if (osid == MP4_READ_OBJ) {
+        if (mask == (mask & MAY_READ)) {
+            return 0; /* note: inode is readable and the operation is merely read */
+        } else {
+            return -EACCES; /* note: attempt to do other operations on read-only file */
+        }
+    }
+    else if (osid == MP4_READ_WRITE) {
+        if (ssid == MP4_TARGET_SID) {
+            if (mask == (mask & (MAY_READ|MAY_WRITE|MAY_APPEND))) {
+                return 0; /* note: inode can be read/write/append by target */
+            } else {
+                return -EACCES; /* note: attempt to do other operations */
+            }
+        } else {
+            if (mask == (mask & MAY_READ)) {
+                return 0; /* note: inode can be read by others */
+            } else {
+                return -EACCES; /* note: attempt to do other operations */
+            }
+        }   
+    }
+    else if (osid == MP4_WRITE_OBJ) {
+        if (ssid == MP4_TARGET_SID) {
+            if (mask == (mask & (MAY_WRITE|MAY_APPEND))) {
+                return 0; /* note: inode can be write/append by target */
+            } else {
+                return -EACCES; /* note: attempt to do other operations */
+            }
+        } else {
+            if (mask == (mask & MAY_READ)) {
+                return 0; /* note: inode can be read by others */
+            } else {
+                return -EACCES; /* note: attempt to do other operations */
+            }
+        }
+    }
+    else if (osid == MP4_EXEC_OBJ) {
+        if (mask == (mask & (MAY_READ|MAY_EXEC))) {
+            return 0; /* note: may read and execute by all */
+        } else {
+            return -EACCES; /* note: attempt to do other operations */
+        }
+    }
+    else if (osid == MP4_READ_DIR) {
+        if (ssid == MP4_TARGET_SID) {
+            if (mask == (mask & (MAY_READ|MAY_EXEC|MAY_ACCESS))) {
+                return 0;
+            } else {
+                return -EACCES;
+            }
+        } else {
+            return 0;
+        }
+    }
+    else if (osid == MP4_RW_DIR) {
+        return 0;
+    }
+    return 0;
+}
 
 /**
  * mp4_inode_permission - Check permission for an inode being opened
@@ -254,152 +323,64 @@ static int mp4_inode_init_security(struct inode *inode, struct inode *dir,
  */
 static int mp4_inode_permission(struct inode *inode, int mask)
 {
-    const struct cred * cur_cred = current_cred();
-    struct mp4_security * cur_sec;
-    /* section: get the path from dentry and dentry from inode */
-    struct dentry * dir_dentry = d_find_alias(inode);
-    char buffer[PATH_MAX];
-    char * path;
+    const struct cred * cur_cred;
+    struct mp4_security * cur_sec = NULL;
+    struct dentry * dir_dentry;
+    char * buffer;
+    char * path = NULL;
     int inode_sid;
-    if (!path)
-        return -ENOMEM;
+    int task_sid;
+    cur_cred = current_cred();
+    if (!cur_cred)
+    {
+        pr_err(KERN_ALERT "unable to get cur_cred.\n");
+        return 0;
+    }
+    dir_dentry = d_find_alias(inode);
+    if (!dir_dentry)
+    {
+        pr_err(KERN_ALERT "unable to get dir_dentry.\n");
+        return 0;
+    }
+    buffer = kzalloc(PATH_MAX, GFP_KERNEL);
+    if (!buffer)
+    {
+        pr_err(KERN_ALERT "unable to allocate memory");
+        return 0;
+    }
     path = dentry_path_raw(dir_dentry, buffer, PATH_MAX);
     dput(dir_dentry);
+    if (IS_ERR(path))
+    {
+        pr_err(KERN_ALERT "unable to get path");
+        kfree(buffer);
+        return 0;
+    }
     /* section: skip checking for common directories */
     if (mp4_should_skip_path(path))
     {
+        kfree(buffer);
         return 0;
     }
     /* section: check whether current task is labeled or not */
     cur_sec = cur_cred->security;
-    inode_sid = get_inode_sid(inode);
-    if (inode_sid == -1)
-    {
-        /* note: the inode does not have xattr, permit it */
-        return 0;
-    }
     if (cur_sec && cur_sec->mp4_flags == MP4_TARGET_SID)
     {
-        /* section: check whether the program is allowed to access the inode */
-        if (mask & MAY_EXEC)
-        {
-            if (inode_sid == MP4_EXEC_OBJ ||
-                inode_sid == MP4_READ_DIR)
-            {
-                return 0;
-            }
-            else
-            {
-                pr_err(KERN_ALERT "exec perm denied\n");
-                return -EACCES;
-            }
-        }
-        else if (mask & MAY_WRITE)
-        {
-            if (inode_sid == MP4_READ_WRITE || 
-                inode_sid == MP4_WRITE_OBJ ||
-                inode_sid == MP4_RW_DIR)
-            {
-                return 0;
-            }
-            else
-            {
-                pr_err(KERN_ALERT "write perm denied\n");
-                return -EACCES;
-            }
-        }
-        else if (mask & MAY_READ)
-        {
-            if (inode_sid == MP4_READ_WRITE ||
-                inode_sid == MP4_READ_OBJ ||
-                inode_sid == MP4_READ_DIR)
-            {
-                return 0;
-            }
-            else
-            {
-                pr_err(KERN_ALERT "read perm denied\n");
-                return -EACCES;
-            }
-        }
-        else if (mask & MAY_ACCESS)
-        {
-            if (inode_sid != MP4_NO_ACCESS)
-            {
-                return 0;
-            }
-            else
-            {
-                pr_err(KERN_ALERT "access denied\n");
-                return -EACCES;
-            }
-        }
-        else
-        {
-            return 0;
-        }
+        task_sid = MP4_TARGET_SID;
     }
     else
     {
-        /* section: whether the inode is an directory */
-        if (mask & MAY_EXEC)
-        {
-            if (inode_permission(inode, MAY_EXEC) && 
-                inode_sid == MP4_EXEC_OBJ)
-            {
-                return 0;
-            }
-            else
-            {
-                pr_err(KERN_ALERT "exec perm denied\n");
-                return -EACCES;
-            }
-        }
-        else if (mask & MAY_WRITE)
-        {
-            if (inode_sid == MP4_READ_WRITE || 
-                inode_sid == MP4_WRITE_OBJ)
-            {
-                return 0;
-            }
-            else
-            {
-                pr_err(KERN_ALERT "write perm denied\n");
-                return -EACCES;
-            }
-            
-        }
-        else if (mask & MAY_READ)
-        {
-            if (inode_sid == MP4_READ_WRITE ||
-                inode_sid == MP4_READ_OBJ)
-            {
-                return 0;
-            }
-            else
-            {
-                pr_err(KERN_ALERT "read perm denied\n");
-                return -EACCES;
-            }
-        }
-        else if (mask & MAY_ACCESS)
-        {
-            if (inode_sid != MP4_NO_ACCESS)
-            {
-                return 0;
-            }
-            else
-            {
-                pr_err(KERN_ALERT "access denied\n");
-                return -EACCES;
-            }
-        }
-        else
-        {
-            return 0;
-        }
+        task_sid = MP4_NOT_TARGET;
     }
-    return 0;
+    inode_sid = get_inode_sid(inode);
+    if (inode_sid == -1)
+    {
+        pr_err(KERN_ALERT "unable to get inode sid");
+        kfree(buffer);
+        return 0;
+    }
+    kfree(buffer);
+    return mp4_has_permission(task_sid, inode_sid, mask);
 }
 
 

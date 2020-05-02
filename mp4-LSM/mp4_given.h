@@ -29,6 +29,9 @@
 /* the target mp4 sid label */
 #define MP4_TARGET_SID 7
 
+/* Not the target subjective */
+#define MP4_NOT_TARGET 8
+
 /**
  * Our custom mp4 security label on tasks and inodes
  * @mp4_flags: the sid values specific to an object/task
