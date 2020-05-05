@@ -23,7 +23,7 @@
  */
 static int get_inode_sid(struct inode *inode)
 {
-    struct dentry * new_dentry;
+    struct dentry * new_dentry = d_find_alias(inode);
     int xattr_size; 
     int return_value;
     int mp4_label;
@@ -36,24 +36,22 @@ static int get_inode_sid(struct inode *inode)
     {
         return MP4_NO_ACCESS;
     }
-    new_dentry = d_find_alias(inode);
     if (!new_dentry)
     {
-        pr_err("d_find_alias return NULL");
+        pr_err(KERN_ALERT "d_find_alias return NULL");
         return -1;
     }
     xattr_size = inode->i_op->getxattr(new_dentry, "security.mp4", NULL, 0);
     if (xattr_size == -1)
     {
         dput(new_dentry);
-        pr_err("getxattr get len return NULL");
+        pr_err(KERN_ALERT "getxattr get len return NULL");
         return -1;
     }
     context = kmalloc(xattr_size + 1, GFP_NOFS);
     if (!context)
     {
         dput(new_dentry);
-        pr_err("kmalloc no memory get_inode_sid");
         return -ENOMEM;
     }
     context[xattr_size] = '\0';
@@ -61,8 +59,7 @@ static int get_inode_sid(struct inode *inode)
     if (return_value != xattr_size)
     {
         dput(new_dentry);
-        kfree(context);
-        pr_err("retv != s_xattr");
+        pr_err(KERN_ALERT "retv != s_xattr");
         return -1;
     }
     mp4_label = __cred_ctx_to_sid(context);
@@ -129,7 +126,6 @@ static int mp4_cred_alloc_blank(struct cred *cred, gfp_t gfp)
 static void mp4_cred_free(struct cred *cred)
 {
     kfree(cred->security);
-    cred->security = NULL;
 }
 
 /**
@@ -189,7 +185,7 @@ static int mp4_inode_init_security(struct inode *inode, struct inode *dir,
      * whether current task is the target process or not **/
     if (!sec) 
     {
-        pr_err("current_security() return NULL");
+        pr_err(KERN_ALERT "current_security() return NULL");
         return 0;
     }
     cur_sid = sec->mp4_flags;
@@ -198,10 +194,10 @@ static int mp4_inode_init_security(struct inode *inode, struct inode *dir,
         /* section: set inode security flag */
         if (!inode->i_security)
         {
-            inode->i_security = kmalloc(sizeof(struct mp4_security), GFP_NOFS);
+            inode->i_security = kmalloc(sizeof(struct mp4_security), GFP_KERNEL);
             if (!inode->i_security)
             {
-                pr_err("malloc failed");
+                pr_err(KERN_ALERT "malloc failed");
                 return -ENOMEM;
             }
         }
@@ -217,12 +213,12 @@ static int mp4_inode_init_security(struct inode *inode, struct inode *dir,
         *name = XATTR_MP4_SUFFIX;
         if (S_ISDIR(inode->i_mode))
         {
-            *value = kstrdup("dir-write", GFP_NOFS);
+            *value = "dir-write";
             *len = 10;
         }
         else
         {
-            *value = kstrdup("read-write", GFP_NOFS);
+            *value = "read-write";
             *len = 11;
         }   
     }
@@ -338,40 +334,34 @@ static int mp4_inode_permission(struct inode *inode, int mask)
     cur_cred = current_cred();
     if (!cur_cred)
     {
-        pr_err("unable to get cur_cred.\n");
-        return 0;
-    }
-    if(!inode)
-    {
-        pr_err("inode is null.\n");
+        pr_err(KERN_ALERT "unable to get cur_cred.\n");
         return 0;
     }
     dir_dentry = d_find_alias(inode);
     if (!dir_dentry)
     {
-        pr_err("unable to get dir_dentry.\n");
+        pr_err(KERN_ALERT "unable to get dir_dentry.\n");
         return 0;
     }
-    buffer = kzalloc(PATH_MAX, GFP_NOFS);
+    buffer = kzalloc(PATH_MAX, GFP_KERNEL);
     if (!buffer)
     {
-        pr_err("unable to allocate memory");
+        pr_err(KERN_ALERT "unable to allocate memory");
         dput(dir_dentry);
         return 0;
     }
     path = dentry_path_raw(dir_dentry, buffer, PATH_MAX);
+    dput(dir_dentry);
     if (IS_ERR(path))
     {
-        pr_err("unable to get path");
+        pr_err(KERN_ALERT "unable to get path");
         kfree(buffer);
-        dput(dir_dentry);
         return 0;
     }
     /* section: skip checking for common directories */
     if (mp4_should_skip_path(path))
     {
         kfree(buffer);
-        dput(dir_dentry);
         return 0;
     }
     /* section: check whether current task is labeled or not */
@@ -387,19 +377,16 @@ static int mp4_inode_permission(struct inode *inode, int mask)
     inode_sid = get_inode_sid(inode);
     if (inode_sid == -1)
     {
-        pr_err("unable to get inode sid");
+        pr_err(KERN_ALERT "unable to get inode sid");
         kfree(buffer);
-        dput(dir_dentry);
         return 0;
     }
+    kfree(buffer);
     ret = mp4_has_permission(task_sid, inode_sid, mask);
     if (ret == -EACCES)
     {
-        pr_info("Permission Denied. Path: %s, subject: %d, object: %d, mask: %x",
-                path, task_sid, inode_sid, mask);
+        pr_info("Permission Denied. Path: %s, subject: %d, object: %d, mask: %x", path, task_sid, inode_sid, mask);
     }
-    kfree(buffer);
-    dput(dir_dentry);
     return ret;
 }
 
